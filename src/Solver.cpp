@@ -69,6 +69,20 @@ bool resoudreSysteme(std::vector<double>& A, std::vector<double>& x, int n)
 bool delPassante(const Elem& e);
 bool resoudreSysteme(std::vector<double>& A, std::vector<double>& x, int n);
 
+// Un générateur fournit de l'énergie tant qu'il n'est pas coupé : une prise
+// dont le disjoncteur a déclenché n'est plus qu'un circuit ouvert.
+bool generateurActif(const Elem& e)
+{
+    return e.kind == Kind::Pile || (e.kind == Kind::Prise && !e.grillee);
+}
+
+// Résistance interne déclarée. La prise secteur n'en a pas : le réseau tient
+// ses 230 V quel que soit l'appareil branché, comme dans les calculs du cours.
+double resistanceInterneDeclaree(const Elem& e)
+{
+    return (e.kind == Kind::Pile) ? e.valeur2 : 0.0;
+}
+
 } // namespace
 
 // Résistance retenue pour un dipôle à cette itération. Les dipôles non
@@ -85,6 +99,9 @@ double resistanceModele(const Elem& e)
     case Kind::Lampe:        return e.grillee ? kROuvert
                                               : (e.rEff > 0 ? e.rEff : resistanceLampe(e.valeur, e.valeur2, 0.0));
     case Kind::Del:          return e.grillee ? kROuvert : (e.rEff > 0 ? e.rEff : kROuvert);
+    case Kind::Fusible:      return e.grillee ? kROuvert : kRFil;
+    case Kind::Materiau:     return resistanceMateriau((int)e.valeur);
+    case Kind::Prise:        return e.grillee ? kROuvert : kRFil;   // éteinte : un simple conducteur
     case Kind::Multimetre: {
         // L'impédance dépend de la BORNE où est planté le cordon rouge, pas du
         // sélecteur : c'est le shunt de la borne 10 A qui court-circuite le
@@ -117,11 +134,12 @@ bool passe(Circuit& c, Diagnostic& diag, double rSecours)
     int ref = 0;
     std::vector<int> piles;
     for (std::size_t k = 0; k < c.elems.size(); ++k)
-        if (c.elems[k].kind == Kind::Pile) piles.push_back((int)k);
+        if (generateurActif(c.elems[k])) piles.push_back((int)k);
     if (!piles.empty()) ref = c.elems[piles[0]].na;
 
     auto resistanceInterne = [&](const Elem& e) {
-        return (e.valeur2 > 1e-9) ? e.valeur2 : rSecours;
+        const double r = resistanceInterneDeclaree(e);
+        return (r > 1e-9) ? r : rSecours;
     };
 
     // Une pile de résistance interne nulle est une source de tension idéale :
@@ -135,7 +153,17 @@ bool passe(Circuit& c, Diagnostic& diag, double rSecours)
     const int nSrc  = (int)pilesIdeales.size();
     const int n     = nNode + nSrc;
     diag.taille = n;
-    if (n <= 0) return true;
+    if (n <= 0) {
+        // Un seul nœud : le générateur est relié à lui-même par un fil, rien
+        // d'autre. Aucun système à résoudre, seulement sa résistance interne.
+        for (int k : piles) {
+            Elem& e = c.elems[k];
+            e.u = 0.0;
+            e.i = e.valeur / resistanceInterne(e);
+            e.p = 0.0;
+        }
+        return true;
+    }
 
     auto idx = [&](int noeud) {
         if (noeud < 0 || noeud == ref) return -1;
@@ -151,6 +179,11 @@ bool passe(Circuit& c, Diagnostic& diag, double rSecours)
         rhs.assign(n, 0.0);
 
         auto stampG = [&](int na, int nb, double g) {
+            // Un dipôle bouclé sur un seul nœud (un fil posé en l'air) ne
+            // porte aucune équation. L'estampiller ajouterait puis retirerait
+            // g sur la diagonale, et l'arrondi de ce va-et-vient effacerait
+            // la conductance de fuite : matrice singulière pour un simple fil.
+            if (na == nb) return;
             const int ia = idx(na), ib = idx(nb);
             if (ia >= 0) A[(std::size_t)ia * n + ia] += g;
             if (ib >= 0) A[(std::size_t)ib * n + ib] += g;
@@ -173,16 +206,16 @@ bool passe(Circuit& c, Diagnostic& diag, double rSecours)
 
         for (const Elem& e : c.elems) {
             if (e.na < 0 || e.nb < 0) continue;
-            switch (e.kind) {
-            case Kind::Pile: {
+            if (generateurActif(e)) {
                 const double r = resistanceInterne(e);
                 if (r > 1e-9) {                     // Norton : E/r en parallèle sur 1/r
                     const double g = 1.0 / r;
                     stampG(e.na, e.nb, g);
                     stampI(e.nb, e.na, e.valeur * g);   // courant sortant de la borne +
                 }
-                break;                                  // sinon : inconnue de branche, plus bas
+                continue;                               // sinon : inconnue de branche, plus bas
             }
+            switch (e.kind) {
             case Kind::Del: {
                 if (delPassante(e)) {
                     // Seuil modélisé en source de Norton : i = (u − Useuil)/Ron,
@@ -222,7 +255,7 @@ bool passe(Circuit& c, Diagnostic& diag, double rSecours)
             if (e.na < 0 || e.nb < 0) continue;
             e.u = potentiel(e.na) - potentiel(e.nb);
 
-            if (e.kind == Kind::Pile) {
+            if (generateurActif(e)) {
                 const double r = resistanceInterne(e);
                 if (r > 1e-9) e.i = (e.valeur + e.u) / r;   // (E − U aux bornes) / r
                 else          e.i = -x[nNode + srcCourant++];
@@ -280,6 +313,7 @@ double resistanceEntre(const Circuit& c, int na, int nb)
 
     std::vector<double> A((std::size_t)n * n, 0.0), x(n, 0.0);
     auto stampG = [&](int p, int q, double g) {
+        if (p == q) return;                    // voir passe() : dipôle bouclé sur un nœud
         const int ia = idx(p), ib = idx(q);
         if (ia >= 0) A[(std::size_t)ia * n + ia] += g;
         if (ib >= 0) A[(std::size_t)ib * n + ib] += g;
@@ -310,21 +344,25 @@ double resistanceEntre(const Circuit& c, int na, int nb)
     return std::fabs(x[ib]);
 }
 
-Diagnostic resoudre(Circuit& c)
+namespace {
+
+// Un calcul complet suivi de sa lecture pédagogique. Rend vrai si une
+// protection vient de s'ouvrir (disjoncteur, fusible, lampe ou DEL qui
+// grille) : le montage a changé, il faut le recalculer.
+bool resoudreUneFois(Circuit& c, Diagnostic& diag)
 {
-    const auto t0 = std::chrono::steady_clock::now();
-    Diagnostic diag;
-
-    c.construireNetlist();
     for (Elem& e : c.elems) { e.u = e.i = e.p = 0; e.allume = false; }
+    diag.boucleFermee = diag.courtCircuit = diag.singulier = false;
+    bool coupure = false;
 
-    if (c.net.nbNoeuds >= 2) {
+    if (c.net.nbNoeuds >= 1) {
         // Un générateur dont les deux bornes tombent sur le même nœud est
         // court-circuité : plus aucune équation ne le tient. On lui prête sa
         // résistance interne réelle plutôt que de rendre « circuit impossible ».
         bool pileCourtCircuitee = false;
         for (const Elem& e : c.elems)
-            if (e.kind == Kind::Pile && e.na == e.nb && e.valeur2 <= 1e-9) pileCourtCircuitee = true;
+            if (generateurActif(e) && e.na == e.nb && resistanceInterneDeclaree(e) <= 1e-9)
+                pileCourtCircuitee = true;
 
         double rSecours = pileCourtCircuitee ? kRSecours : 0.0;
         if (!passe(c, diag, rSecours) && rSecours == 0.0) {
@@ -345,6 +383,7 @@ Diagnostic resoudre(Circuit& c)
             if (std::fabs(e.p) > 1.6 * e.valeur2) {
                 e.grillee = true;
                 e.allume  = false;
+                coupure   = true;
                 diag.messages.push_back(e.nom + " a grillé : la puissance reçue dépasse largement sa valeur nominale.");
             }
         }
@@ -353,8 +392,26 @@ Diagnostic resoudre(Circuit& c)
             if (e.i > e.valeur2) {
                 e.grillee = true;
                 e.allume  = false;
+                coupure   = true;
                 diag.messages.push_back(e.nom + " a grillé : une DEL demande une résistance de protection en série.");
             }
+        }
+        if (e.kind == Kind::Fusible && !e.grillee && std::fabs(e.i) > e.valeur) {
+            e.grillee = true;
+            coupure   = true;
+            diag.messages.push_back(e.nom + " a fondu : " + fmtIntensite(std::fabs(e.i)) + " pour un fusible de " +
+                                    fmtIntensite(e.valeur) + ". Il a ouvert le circuit et protégé les autres dipôles.");
+        }
+        if (e.kind == Kind::Prise && !e.grillee && std::fabs(e.i) > e.valeur2) {
+            e.grillee = true;
+            coupure   = true;
+            const bool courtCircuit = std::fabs(e.i) > 10.0 * e.valeur2;
+            diag.messages.push_back(
+                "Disjoncteur de " + e.nom + " déclenché : " +
+                (courtCircuit ? std::string("court-circuit") : fmtIntensite(std::fabs(e.i))) +
+                " pour un calibre de " + fmtIntensite(e.valeur2) +
+                (courtCircuit ? ". Sans lui, les fils chaufferaient jusqu'à l'incendie."
+                              : ". Trop d'appareils en marche : il coupe avant que les fils ne chauffent."));
         }
         if (e.kind == Kind::Multimetre) {
             if (e.grillee) {
@@ -375,6 +432,7 @@ Diagnostic resoudre(Circuit& c)
                                       e.mode == ModeMultimetre::Intensite);
                 if (enShunt && std::fabs(e.i) > fusible) {
                     e.grillee = true;
+                    coupure   = true;
                     e.lecture = 0.0;
                     diag.messages.push_back(
                         e.nom + " : fusible fondu. Un ampèremètre se branche EN SÉRIE ; "
@@ -399,6 +457,39 @@ Diagnostic resoudre(Circuit& c)
                                     ". Ne jamais relier directement le + au − d'une pile.");
         }
     }
+    return coupure;
+}
+
+} // namespace
+
+double puissanceFournie(const Circuit& c)
+{
+    // Convention de Elem : pour un générateur qui débite, le courant entre
+    // par la borne − (a) et ressort par la borne + (b), donc u × i < 0.
+    double p = 0.0;
+    for (const Elem& e : c.elems)
+        if (estGenerateur(e.kind)) p -= e.p;
+    return p;
+}
+
+Diagnostic resoudre(Circuit& c)
+{
+    const auto t0 = std::chrono::steady_clock::now();
+    Diagnostic diag;
+
+    c.construireNetlist();
+    // Un disjoncteur qui déclenche ou une lampe qui grille change le montage :
+    // on le recalcule aussitôt, sinon l'élève verrait encore le courant
+    // d'avant la coupure. Chaque tour ouvre au moins un dipôle, quatre suffisent.
+    for (int tour = 0; tour < 4; ++tour)
+        if (!resoudreUneFois(c, diag)) break;
+
+    // Les tours successifs répètent les avertissements permanents (ohmmètre
+    // alimenté…) : on n'en garde qu'un exemplaire.
+    std::vector<std::string> uniques;
+    for (const std::string& m : diag.messages)
+        if (std::find(uniques.begin(), uniques.end(), m) == uniques.end()) uniques.push_back(m);
+    diag.messages.swap(uniques);
 
     const auto t1 = std::chrono::steady_clock::now();
     diag.dureeMs = std::chrono::duration<double, std::milli>(t1 - t0).count();

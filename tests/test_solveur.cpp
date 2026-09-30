@@ -10,6 +10,7 @@
 #include "Solver.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -303,10 +304,181 @@ int main()
                 premier(c, Kind::Multimetre)->lecture, 50.0, 0.1, "ohm");
     }
 
+    // ── Secteur, puissance et énergie (3e ch.6, 3e ch.7, 4e ch.10) ───────
+    {
+        Circuit c;
+        construire("Ventilateur", c);
+        resoudre(c);
+        verifie("Ventilateur 1 kohm sous 220 V : I", std::fabs(premier(c, Kind::Moteur)->i), 0.22, 1e-4, "A");
+    }
+    {
+        Circuit c;
+        construire("Applications", c);
+        resoudre(c);
+        verifie("Lave-linge 46 ohm sous 230 V : I", std::fabs(premier(c, Kind::Resistance, 0)->i), 5.0, 1e-3, "A");
+        verifie("Smartphone 20 ohm sous 5 V : I", std::fabs(premier(c, Kind::Resistance, 1)->i) * 1000.0,
+                250.0, 0.1, "mA");
+        verifie("Bouilloire 115 ohm sous 230 V : I", std::fabs(premier(c, Kind::Resistance, 2)->i), 2.0, 1e-3, "A");
+    }
+    {
+        Circuit c;
+        construire("Puissance, énergie", c);
+        resoudre(c);
+        const double p = std::fabs(premier(c, Kind::Resistance, 0)->p);
+        verifie("Seche-cheveux sur 230 V : P (wattmetre)", p, 2000.0, 0.5, "W");
+        verifie("Seche-cheveux seul : P fournie par la prise", puissanceFournie(c), 2000.0, 0.5, "W");
+        verifie("Seche-cheveux 15 min : E en kWh", energieKWh(p, 0.25), 0.5, 1e-3, "kWh");
+        verifie("Seche-cheveux 15 min : E en joules", energieJoules(p, 900.0) / 1e6, 1.8, 1e-3, "MJ");
+        verifie("Seche-cheveux 15 min : cout a 0,20 euro/kWh", energieKWh(p, 0.25) * 0.20, 0.10, 1e-3, "EUR");
+        for (Elem& e : c.elems)
+            if (e.kind == Kind::Interrupteur) e.ferme = true;
+        resoudre(c);
+        verifie("Trois appareils en marche : P fournie = somme", puissanceFournie(c), 3010.0, 1.0, "W");
+    }
+    {
+        ++total;
+        const std::string e = fmtEnergie(1.8e6);
+        const std::string eur = fmtEuros(0.10);
+        const std::string centime = fmtEuros(0.002);
+        const bool ok = (e == "0,500 kWh") && (eur == "0,10 \xE2\x82\xAC") && (centime == "0,002 \xE2\x82\xAC");
+        if (!ok) { ++echecs; std::printf(" ECHEC format : \"%s\" / \"%s\" / \"%s\"\n", e.c_str(), eur.c_str(), centime.c_str()); }
+        else       std::printf("  ok   %-58s %10s\n", "Ecriture : 1,8 MJ = 0,500 kWh, 0,10 euro", "0,500 kWh");
+    }
+    {
+        Circuit c;
+        construire("Installation domestique", c);
+        resoudre(c);
+        verifie("Installation : intensite totale au disjoncteur", std::fabs(premier(c, Kind::Prise)->i),
+                7.26, 0.02, "A");
+        verifie("Installation : le plafonnier recoit 230 V", std::fabs(premier(c, Kind::Lampe)->u), 230.0, 0.01, "V");
+        verifieVrai("Installation : le disjoncteur tient a 7,26 A", premier(c, Kind::Prise)->grillee, false);
+        for (Elem& e : c.elems)
+            if (e.kind == Kind::Interrupteur) e.ferme = true;   // le radiateur en plus
+        const Diagnostic d = resoudre(c);
+        verifieVrai("Radiateur en plus (18 A) : le disjoncteur declenche", premier(c, Kind::Prise)->grillee, true);
+        verifieVrai("Disjoncteur declenche : plus aucun courant", d.boucleFermee, false);
+    }
+    {
+        Circuit c;                                   // prise en court-circuit franc
+        c.ajouter(faire(Kind::Prise, {0, 2}, {0, 0}, 230.0, 16.0));
+        c.ajouter(faire(Kind::Fil, {0, 0}, {4, 0}));
+        c.ajouter(faire(Kind::Fil, {4, 0}, {4, 2}));
+        c.ajouter(faire(Kind::Fil, {4, 2}, {0, 2}));
+        const Diagnostic d = resoudre(c);
+        verifieVrai("Prise en court-circuit : le disjoncteur declenche", premier(c, Kind::Prise)->grillee, true);
+        verifieVrai("Prise en court-circuit : calcul resolu", d.singulier, false);
+    }
+
+    // ── Conducteurs et isolants, fusible (6e ch.13) ──────────────────────
+    {
+        Circuit c;
+        construire("Test conducteur", c);
+        Elem* materiau = nullptr;
+        for (Elem& e : c.elems)
+            if (e.kind == Kind::Materiau) materiau = &e;
+        double iCuivre = 0;
+        for (int k = 0; k < nbMateriaux(); ++k) {
+            materiau->valeur = k;
+            resoudre(c);
+            const Elem* lampe = premier(c, Kind::Lampe);
+            const std::string nom = nomMateriau(k);
+            if (k == 0) iCuivre = std::fabs(lampe->i);
+            verifieVrai("Materiau " + nom + " : la lampe brille", lampe->allume, estConducteur(k));
+            if (!estConducteur(k))
+                verifie("Materiau " + nom + " : aucun courant", std::fabs(lampe->i) * 1000.0, 0.0, 1e-3, "mA");
+            if (nom == "graphite")
+                verifieVrai("Graphite : moins de courant qu'avec le cuivre", std::fabs(lampe->i) < iCuivre, true);
+        }
+    }
+    {
+        Circuit c;
+        construire("Fusible contre", c);
+        resoudre(c);
+        verifieVrai("Fusible 1 A : la lampe brille, le fusible tient",
+                    premier(c, Kind::Lampe)->allume && !premier(c, Kind::Fusible)->grillee, true);
+        for (Elem& e : c.elems)
+            if (e.kind == Kind::Interrupteur) e.ferme = true;
+        const Diagnostic d = resoudre(c);
+        verifieVrai("Court-circuit par K2 : le fusible fond", premier(c, Kind::Fusible)->grillee, true);
+        verifie("Fusible fondu : la pile ne debite plus", std::fabs(premier(c, Kind::Pile)->i), 0.0, 1e-6, "A");
+        verifieVrai("Fusible fondu : le circuit est ouvert", d.boucleFermee, false);
+    }
+
+    // ── Circuit mixte et caractéristique de la lampe ─────────────────────
+    {
+        Circuit c;
+        construire("Circuit mixte", c);
+        resoudre(c);
+        verifie("Mixte : U aux bornes de R1", std::fabs(premier(c, Kind::Resistance, 0)->u), 4.5, 0.01, "V");
+        verifie("Mixte : U aux bornes de R2", std::fabs(premier(c, Kind::Resistance, 1)->u), 4.5, 0.01, "V");
+        verifie("Mixte : I dans R1", std::fabs(premier(c, Kind::Resistance, 0)->i) * 1000.0, 45.0, 0.1, "mA");
+        verifie("Mixte : I dans R2", std::fabs(premier(c, Kind::Resistance, 1)->i) * 1000.0, 22.5, 0.1, "mA");
+    }
+    {
+        Circuit c;
+        construire("d'une lampe", c);
+        Elem* pile = nullptr;
+        for (Elem& e : c.elems)
+            if (e.kind == Kind::Pile) pile = &e;
+        pile->valeur = 1.0;
+        resoudre(c);
+        const Elem* lampe = premier(c, Kind::Lampe);
+        const double rFaible = std::fabs(lampe->u / lampe->i);
+        pile->valeur = 6.0;
+        resoudre(c);
+        const double rNominal = std::fabs(lampe->u / lampe->i);
+        verifie("Lampe sous 6 V : R = 60 ohm", rNominal, 60.0, 0.5, "ohm");
+        verifieVrai("Lampe : R sous 1 V bien plus faible (non ohmique)", rFaible < 0.6 * rNominal, true);
+    }
+
+    // ── Montage en cours de construction : jamais « impossible à résoudre » ─
+    {
+        Circuit c;
+        construire("Circuit simple", c);
+        c.ajouter(faire(Kind::Fil, {20, 0}, {24, 0}));     // fil posé, pas encore raccordé
+        c.ajouter(faire(Kind::Fil, {24, 0}, {24, 3}));
+        const Diagnostic d = resoudre(c);
+        verifieVrai("Fil en l'air : le montage reste calculable", d.singulier, false);
+        verifieVrai("Fil en l'air : la lampe brille toujours", premier(c, Kind::Lampe)->allume, true);
+    }
+
+    // ── Édition : quart de tour et fil orthogonal (§ 6.1) ────────────────
+    {
+        int defauts = 0;
+        for (int ax = -2; ax <= 2; ++ax) for (int ay = -2; ay <= 2; ++ay)
+        for (int bx = -3; bx <= 3; ++bx) for (int by = -3; by <= 3; ++by) {
+            Elem e = faire(Kind::Resistance, {ax, ay}, {bx, by});
+            Elem f = e;
+            const int l2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+            for (int k = 0; k < 4; ++k) {
+                tourner(f);
+                const int dx = f.b.x - f.a.x, dy = f.b.y - f.a.y;
+                if (dx * dx + dy * dy != l2) ++defauts;
+            }
+            if (f.a != e.a || f.b != e.b) ++defauts;
+        }
+        verifie("Quart de tour : longueur gardee, 4 quarts = identite", defauts, 0, 0);
+
+        Elem h = faire(Kind::Lampe, {0, 0}, {4, 0});
+        tourner(h);
+        verifieVrai("Quart de tour : une lampe horizontale devient verticale",
+                    h.a.x == h.b.x && std::abs(h.b.y - h.a.y) == 4, true);
+
+        const Pt coude = coudeDuFil({0, 0}, {3, 2});
+        verifieVrai("Fil de (0,0) a (3,2) : coude en (3,0)", coude == Pt{3, 0}, true);
+        verifieVrai("Fil droit : pas de coude", coudeDuFil({0, 0}, {0, 5}) == Pt{0, 5}, true);
+    }
+
     // ── Aller-retour sur disque : un montage rouvert doit être identique ──
     {
         Circuit avant;
         construire("cinq lampes", avant);
+        Elem materiau = faire(Kind::Materiau, {30, 0}, {34, 0}, 4);      // bois sec
+        Elem prise    = faire(Kind::Prise, {30, 4}, {34, 4}, 220.0, 10.0);
+        Elem fusible  = faire(Kind::Fusible, {30, 8}, {34, 8}, 0.5);
+        avant.ajouter(materiau);
+        avant.ajouter(prise);
+        avant.ajouter(fusible);
         std::string erreur;
         ++total;
         Circuit apres;

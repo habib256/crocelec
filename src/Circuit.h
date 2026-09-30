@@ -24,6 +24,11 @@ enum class Kind {
     Voltmetre,
     Amperemetre,
     Multimetre,
+    // Ajoutés après coup : toujours en fin de liste, le numéro du type est
+    // écrit tel quel dans les fichiers .croc.
+    Prise,          // prise secteur 230 V et son disjoncteur (3e)
+    Fusible,        // 6e / 4e
+    Materiau,       // matériau test conducteur / isolant (6e ch.13)
     COUNT
 };
 
@@ -39,11 +44,31 @@ const char* nomKind(Kind k);        // "Résistance", pour l'interface
 const char* prefixeKind(Kind k);    // "R", pour l'étiquetage automatique
 const char* aideKind(Kind k);       // une ligne d'explication pour l'élève
 
+// Pile et prise secteur : les deux dipôles qui fournissent l'énergie.
+inline bool estGenerateur(Kind k) { return k == Kind::Pile || k == Kind::Prise; }
+
+// Matériaux du test conducteur / isolant (6e ch.13). L'indice est rangé dans
+// Elem::valeur, ce qui garde le format de fichier inchangé.
+int         nbMateriaux();
+const char* nomMateriau(int index);
+double      resistanceMateriau(int index);   // échantillon entre les deux pinces
+bool        estConducteur(int index);
+
 struct Pt {
     int x = 0, y = 0;
 };
 inline bool operator==(Pt a, Pt b) { return a.x == b.x && a.y == b.y; }
 inline bool operator!=(Pt a, Pt b) { return !(a == b); }
+
+struct Elem;
+
+// Quart de tour dans le sens horaire autour du milieu du dipôle, sans quitter
+// la grille (touche R, § 6.1). Quatre quarts de tour rendent le dipôle intact.
+void tourner(Elem& e);
+
+// Tracé orthogonal d'un fil (§ 6.1) : un segment s'il est droit, sinon deux,
+// horizontal puis vertical. Rend le point du coude, ou `b` s'il n'y en a pas.
+Pt coudeDuFil(Pt a, Pt b);
 
 struct Elem {
     Kind kind = Kind::Fil;
@@ -56,11 +81,14 @@ struct Elem {
     //   Moteur       valeur = R (Ω)
     //   Lampe        valeur = tension nominale  valeur2 = puissance nominale
     //   Del          valeur = tension de seuil  valeur2 = intensité maximale
+    //   Prise        valeur = tension (V)       valeur2 = calibre du disjoncteur (A)
+    //   Fusible      valeur = intensité maximale (A)
+    //   Materiau     valeur = indice du matériau (voir nomMateriau)
     double valeur  = 0;
     double valeur2 = 0;
 
     bool ferme   = true;    // interrupteur : fermé ?
-    bool grillee = false;   // lampe / DEL détruite, fusible du multimètre fondu
+    bool grillee = false;   // lampe / DEL détruite, fusible fondu, disjoncteur déclenché
 
     // Multimètre : réglages de la face avant et état de l'afficheur.
     ModeMultimetre  mode  = ModeMultimetre::Tension;

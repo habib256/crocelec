@@ -1,4 +1,5 @@
-// Instruments.cpp — face avant du multimètre, tableau de relevés, tracé U(I).
+// Instruments.cpp — face avant du multimètre, tableau de relevés, tracé U(I),
+// wattmètre et compteur d'énergie.
 //
 // Le multimètre est le chapitre 4e ch.7 à lui tout seul : bornes, sélecteur,
 // calibres, affichage « 1. » de dépassement, et les erreurs de branchement qui
@@ -391,6 +392,146 @@ void panneauGraphique(App& app)
     for (const ImVec2& p : points)
         dl->AddCircleFilled(versEcran(p.x, p.y), 4.0f, colPoint, 12);
 
+    ImGui::End();
+}
+
+// ── Énergie : wattmètre, E = P × t, compteur (3e ch.7) ───────────────────
+
+namespace {
+
+// Ce qu'on branche sur une prise ou une pile pour qu'il consomme : c'est sur
+// eux que le wattmètre a un sens.
+bool estRecepteur(Kind k)
+{
+    return k == Kind::Lampe || k == Kind::Resistance || k == Kind::Moteur ||
+           k == Kind::Del || k == Kind::Materiau;
+}
+
+std::string fmtDuree(double secondes)
+{
+    const long total = (long)std::llround(secondes);
+    const long h = total / 3600, min = (total % 3600) / 60, s = total % 60;
+    char buf[48];
+    if (h > 0)        std::snprintf(buf, sizeof buf, "%ld h %02ld min", h, min);
+    else if (min > 0) std::snprintf(buf, sizeof buf, "%ld min %02ld s", min, s);
+    else              std::snprintf(buf, sizeof buf, "%ld s", s);
+    return buf;
+}
+
+// Index du compteur électrique : décimales fixes, comme les rouleaux du
+// compteur, pour que l'élève voie les chiffres de droite défiler.
+std::string fmtIndex(double kwh)
+{
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%.4f", kwh);
+    std::string s(buf);
+    for (char& c : s)
+        if (c == '.') c = ',';
+    return s + " kWh";
+}
+
+// Arrondi à trois chiffres significatifs, écrit en entier quand il est
+// grand : « 7 200 000 J » comme au tableau, pas le « 7 199 946 J » que
+// donnerait le résidu des fils et de l'interrupteur.
+std::string fmtArrondi(double v)
+{
+    if (v == 0.0) return "0";
+    const double pas = std::pow(10.0, std::floor(std::log10(std::fabs(v))) - 2);
+    const double r = std::round(v / pas) * pas;
+    return (std::fabs(r) >= 100.0) ? fmtNombre(r, 1 + (int)std::floor(std::log10(std::fabs(r)))) : fmtNombre(r, 3);
+}
+
+void ecranVert(const char* id, const std::string& texte)
+{
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.85f, 0.89f, 0.83f, 1.0f));
+    ImGui::BeginChild(id, ImVec2(-1, ImGui::GetTextLineHeight() * 3.0f), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PushFont(nullptr, ImGui::GetFontSize() * 1.8f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.09f, 0.14f, 0.11f, 1.0f));
+    ImGui::TextUnformatted(texte.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+} // namespace
+
+void panneauEnergie(App& app)
+{
+    ImGui::Begin("Énergie");
+    ImGui::PushTextWrapPos(0.0f);
+
+    // ── Wattmètre sur l'appareil choisi ──────────────────────────────────
+    ImGui::Text("Wattmètre");
+    const bool choisi = app.selection >= 0 && app.selection < (int)app.circuit.elems.size() &&
+                        estRecepteur(app.circuit.elems[app.selection].kind);
+    if (!choisi) {
+        ImGui::TextDisabled("Choisis un appareil dans le schéma (lampe, résistance, moteur…) : "
+                            "le wattmètre affiche la puissance qu'il reçoit.");
+    } else {
+        const Elem& e = app.circuit.elems[app.selection];
+        const double p = std::fabs(e.p);
+        ecranVert("wattmetre", fmtPuissance(p));
+        ImGui::Text("%s : P = U x I = %s x %s = %s", e.nom.c_str(), fmtTension(std::fabs(e.u)).c_str(),
+                    fmtIntensite(std::fabs(e.i)).c_str(), fmtPuissance(p).c_str());
+
+        ImGui::Spacing();
+        ImGui::Text("Énergie reçue : E = P x t");
+        ImGui::SetNextItemWidth(120);
+        ImGui::InputDouble("durée (min)", &app.dureeMinutes, 5.0, 60.0, "%.0f");
+        app.dureeMinutes = std::clamp(app.dureeMinutes, 0.0, 525600.0);
+        const struct { const char* libelle; double minutes; } durees[] = {
+            {"10 min", 10}, {"15 min", 15}, {"1 h", 60}, {"2 h", 120}, {"24 h", 1440}};
+        for (const auto& d : durees) {
+            if (&d != durees) ImGui::SameLine(0.0f, 4.0f);   // sur leur propre ligne : le panneau est étroit
+            if (ImGui::SmallButton(d.libelle)) app.dureeMinutes = d.minutes;
+        }
+
+        const double secondes = app.dureeMinutes * 60.0;
+        const double heures   = app.dureeMinutes / 60.0;
+        const double joules   = energieJoules(p, secondes);
+        const double kwh      = energieKWh(p, heures);
+        ImGui::BulletText("en joules : E = %s W x %s s = %s J", fmtArrondi(p).c_str(),
+                          fmtArrondi(secondes).c_str(), fmtArrondi(joules).c_str());
+        ImGui::BulletText("en kWh : E = %s kW x %s h = %s kWh", fmtNombre(p / 1000.0, 3).c_str(),
+                          fmtNombre(heures, 3).c_str(), fmtNombre(kwh, 3).c_str());
+        ImGui::BulletText("coût : %s kWh x %s = %s", fmtNombre(kwh, 3).c_str(),
+                          (fmtEuros(app.prixKWh) + "/kWh").c_str(), fmtEuros(kwh * app.prixKWh).c_str());
+    }
+
+    ImGui::Separator();
+
+    // ── Compteur de l'installation ───────────────────────────────────────
+    ImGui::Text("Compteur électrique");
+    ImGui::TextDisabled("Il compte l'énergie fournie à tous les appareils en marche, "
+                        "comme le compteur de la maison.");
+    const double pTotale = std::max(0.0, puissanceFournie(app.circuit));
+    const double kwhCompteur = app.compteurJoules / 3.6e6;
+    ecranVert("compteur", fmtIndex(kwhCompteur));
+    ImGui::Text("Puissance appelée : %s", fmtPuissance(pTotale).c_str());
+    ImGui::Text("Durée écoulée : %s", fmtDuree(app.compteurSecondes).c_str());
+    ImGui::Text("Coût : %s", fmtEuros(kwhCompteur * app.prixKWh).c_str());
+
+    if (ImGui::Button(app.compteurEnMarche ? "Arrêter" : "Démarrer")) app.compteurEnMarche = !app.compteurEnMarche;
+    ImGui::SameLine();
+    if (ImGui::Button("Remettre à zéro")) { app.compteurJoules = 0; app.compteurSecondes = 0; }
+
+    ImGui::Text("Vitesse :");
+    const struct { const char* libelle; double facteur; } vitesses[] = {
+        {"temps réel", 1.0}, {"1 s = 1 min", 60.0}, {"1 s = 1 h", 3600.0}};
+    for (const auto& v : vitesses) {
+        ImGui::SameLine();
+        if (ImGui::RadioButton(v.libelle, app.acceleration == v.facteur)) app.acceleration = v.facteur;
+    }
+
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputDouble("prix du kWh (euros)", &app.prixKWh, 0.01, 0.05, "%.4f");
+    app.prixKWh = std::max(0.0, app.prixKWh);
+    ImGui::TextDisabled("Tarif à vérifier sur une facture récente.");
+
+    ImGui::PopTextWrapPos();
     ImGui::End();
 }
 

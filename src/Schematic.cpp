@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace croc {
 namespace {
@@ -163,6 +164,66 @@ void dessineSymbole(ImDrawList* dl, const Elem& e, ImVec2 A, ImVec2 B, float zoo
         break;
     }
 
+    case Kind::Prise: {
+        // Générateur alternatif : cercle et sinusoïde, le symbole du cahier.
+        amenees();
+        const float r = corps * 0.5f;
+        const ImU32 c = e.grillee ? kColGrillee : col;
+        dl->AddCircleFilled(centre, r, kColFond, 24);
+        dl->AddCircle(centre, r, c, 24, ep);
+        ImVec2 sinus[17];
+        for (int k = 0; k <= 16; ++k) {
+            const float t = k / 16.0f;
+            const float x = (t - 0.5f) * r * 1.2f;
+            const float y = -std::sin(t * 6.2831853f) * r * 0.32f;
+            sinus[k] = centre + d * x + n * y;
+        }
+        dl->AddPolyline(sinus, 17, c, ImDrawFlags_None, ep * 0.8f);
+        break;
+    }
+
+    case Kind::Fusible: {
+        // Rectangle traversé par le filament ; fondu, le filament est coupé.
+        amenees();
+        const float h = 5.0f * zoom;
+        const ImU32 c = e.grillee ? kColGrillee : col;
+        const ImVec2 p1 = c1 + n * h, p2 = c2 + n * h, p3 = c2 - n * h, p4 = c1 - n * h;
+        dl->AddQuadFilled(p1, p2, p3, p4, kColFond);
+        dl->AddQuad(p1, p2, p3, p4, c, ep);
+        if (e.grillee) {
+            const float trou = corps * 0.15f;
+            traitEpais(dl, c1, centre - d * trou, c, ep);
+            traitEpais(dl, centre + d * trou, c2, c, ep);
+        } else {
+            traitEpais(dl, c1, c2, c, ep);
+        }
+        break;
+    }
+
+    case Kind::Materiau: {
+        // L'échantillon tenu entre deux pinces crocodiles.
+        amenees();
+        static const ImU32 couleurs[] = {
+            IM_COL32(184, 115, 51, 255),   // cuivre
+            IM_COL32(70, 72, 78, 255),     // graphite
+            IM_COL32(120, 175, 225, 255),  // eau salée
+            IM_COL32(240, 200, 60, 255),   // plastique
+            IM_COL32(150, 105, 60, 255),   // bois sec
+            IM_COL32(200, 230, 235, 255),  // verre
+        };
+        const int index = std::clamp((int)e.valeur, 0, (int)(sizeof couleurs / sizeof couleurs[0]) - 1);
+        const float h = 6.0f * zoom;
+        const ImVec2 m1 = c1 + d * (4.0f * zoom), m2 = c2 - d * (4.0f * zoom);
+        dl->AddQuadFilled(m1 + n * h, m2 + n * h, m2 - n * h, m1 - n * h, couleurs[index]);
+        dl->AddQuad(m1 + n * h, m2 + n * h, m2 - n * h, m1 - n * h, col, 1.0f);
+        for (ImVec2 bout : {c1, c2}) {       // mâchoires des pinces
+            const ImVec2 dedans = (bout.x == c1.x && bout.y == c1.y) ? d : d * -1.0f;
+            traitEpais(dl, bout, bout + dedans * (6.0f * zoom) + n * (h + 2.0f * zoom), col, ep);
+            traitEpais(dl, bout, bout + dedans * (6.0f * zoom) - n * (h + 2.0f * zoom), col, ep);
+        }
+        break;
+    }
+
     case Kind::Pile: {
         // Trait long = borne + (côté b), trait court = borne − (côté a).
         const float ecart = 4.5f * zoom;
@@ -219,7 +280,7 @@ void dessineSymbole(ImDrawList* dl, const Elem& e, ImVec2 A, ImVec2 B, float zoo
 
 // Points animés qui matérialisent le courant. La vitesse dépend de I, mais
 // elle est bornée : au-delà, l'élève ne voit plus qu'un trait continu.
-void dessineCourant(ImDrawList* dl, const App& app, const Elem& e, ImVec2 A, ImVec2 B)
+void dessineCourant(ImDrawList* dl, const App& app, const Elem& e, ImVec2 A, ImVec2 B, bool alternatif)
 {
     if (!app.reglages.animerCourant) return;
     if (std::fabs(e.i) < 1e-5) return;
@@ -237,8 +298,14 @@ void dessineCourant(ImDrawList* dl, const App& app, const Elem& e, ImVec2 A, ImV
     const int   nb  = std::max(1, (int)(L / pas));
     const float phase = std::fmod((float)app.tempsAnim * vitesse, pas);
 
+    // Sur le secteur, le courant est alternatif : les porteurs oscillent sur
+    // place au lieu de défiler (ralenti à 1 aller-retour par seconde, le
+    // 50 Hz réel serait invisible).
+    const float oscillation = 0.4f * pas * std::sin((float)app.tempsAnim * 6.2831853f);
+
     for (int k = 0; k <= nb; ++k) {
-        float t = k * pas + (sens > 0 ? phase : pas - phase);
+        float t = alternatif ? k * pas + pas * 0.5f + oscillation
+                             : k * pas + (sens > 0 ? phase : pas - phase);
         if (t < 0 || t > L) continue;
         const ImVec2 p = A + d * t;
         dl->AddCircleFilled(p, 3.0f * app.zoom, kColCourant, 10);
@@ -258,10 +325,17 @@ void dessineValeurs(ImDrawList* dl, const App& app, const Elem& e, ImVec2 A, ImV
     // symbole voisin dès que le montage se resserre.
     std::string ligne1, ligne2;
     if (app.reglages.afficherNoms && !e.nom.empty()) ligne1 = e.nom;
+    if (e.kind == Kind::Materiau) ligne1 += (ligne1.empty() ? "" : " : ") + std::string(nomMateriau((int)e.valeur));
     if (app.reglages.afficherValeurs) {
         switch (e.kind) {
         case Kind::Voltmetre:   ligne2 = fmtTension(std::fabs(e.u)); break;
         case Kind::Amperemetre: ligne2 = fmtIntensite(std::fabs(e.i)); break;
+        case Kind::Prise:
+            ligne2 = e.grillee ? "disjoncteur déclenché" : fmtTension(e.valeur) + " / " + fmtIntensite(std::fabs(e.i));
+            break;
+        case Kind::Fusible:
+            ligne2 = e.grillee ? "fondu" : fmtIntensite(std::fabs(e.i));
+            break;
         case Kind::Multimetre:
             if (e.grillee)         ligne2 = "fusible fondu";
             else if (e.depassement) ligne2 = "1.  (dépassement)";
@@ -282,8 +356,12 @@ void dessineValeurs(ImDrawList* dl, const App& app, const Elem& e, ImVec2 A, ImV
     const float largeur = std::max(t1.x, t2.x);
     const float hauteur = (ligne1.empty() ? 0.0f : hauteurLigne) + (ligne2.empty() ? 0.0f : hauteurLigne);
 
+    // Dipôle horizontal : étiquette centrée au-dessus. Dipôle vertical :
+    // étiquette collée à côté — centrée, elle recouvrirait le symbole dès
+    // qu'elle est plus large que le décalage.
     ImVec2 pos = centre + n * decalage;
-    pos.x -= largeur * 0.5f;
+    if (std::fabs(n.x) > std::fabs(n.y)) { if (n.x < 0) pos.x -= largeur; }
+    else                                  pos.x -= largeur * 0.5f;
     pos.y -= hauteur * 0.5f;
     dl->AddRectFilled(ImVec2(pos.x - 4, pos.y - 2), ImVec2(pos.x + largeur + 4, pos.y + hauteur + 2),
                       IM_COL32(250, 249, 245, 225), 3.0f);
@@ -338,6 +416,41 @@ int dipoleSousLaSouris(const App& app, ImVec2 souris)
     return trouve;
 }
 
+// Extrémité de dipôle sous le pointeur : c'est de là qu'on tire un fil, comme
+// dans Crocodile Clips. La zone est volontairement petite pour ne pas gêner
+// la sélection du dipôle lui-même, qu'on attrape par son milieu.
+bool extremiteSousLaSouris(const App& app, ImVec2 souris, Pt& extremite)
+{
+    const float rayon = 9.0f * std::max(0.8f, app.zoom);
+    float meilleure = rayon;
+    bool trouve = false;
+    for (const Elem& e : app.circuit.elems) {
+        for (Pt p : {e.a, e.b}) {
+            const float d = longueur(souris - versEcran(app, p));
+            if (d < meilleure) { meilleure = d; extremite = p; trouve = true; }
+        }
+    }
+    return trouve;
+}
+
+// Pose un fil orthogonal de `a` à `b` : un ou deux segments. Rend l'indice
+// du dernier posé.
+int poserFil(App& app, Pt a, Pt b)
+{
+    Elem fil;
+    fil.kind = Kind::Fil;
+    const Pt coude = coudeDuFil(a, b);
+    int index = -1;
+    if (coude != b) {
+        fil.a = a; fil.b = coude;
+        index = app.circuit.ajouter(fil);
+        a = coude;
+    }
+    fil.a = a; fil.b = b;
+    index = app.circuit.ajouter(fil);
+    return index;
+}
+
 Elem fabrique(Kind k, Pt a, Pt b)
 {
     Elem e;
@@ -350,6 +463,9 @@ Elem fabrique(Kind k, Pt a, Pt b)
     case Kind::Moteur:      e.valeur = 20.0;                   break;
     case Kind::Lampe:       e.valeur = 6.0;  e.valeur2 = 0.6;  break; // 6 V / 0,6 W → 60 Ω, 100 mA
     case Kind::Del:         e.valeur = 2.0;  e.valeur2 = 0.03; break; // seuil 2 V, 30 mA max
+    case Kind::Prise:       e.valeur = 230.0; e.valeur2 = 16.0; break; // disjoncteur 16 A
+    case Kind::Fusible:     e.valeur = 0.5;                    break;
+    case Kind::Materiau:    e.valeur = 0;                      break; // cuivre
     default: break;
     }
     return e;
@@ -359,6 +475,7 @@ const char* libelleOutil(Outil o)
 {
     switch (o) {
     case Outil::Selection: return "Sélection";
+    case Outil::Gomme:     return "Gomme";
     default:               return nomKind(kindDeLOutil(o));
     }
 }
@@ -410,7 +527,10 @@ void panneauSchema(App& app)
     const bool survole = ImGui::IsItemHovered();
     const bool actif   = ImGui::IsItemActive();
 
-    if (!app.vueInitialisee || app.ajusterVue) {
+    // Les premières images, la disposition des panneaux n'est pas encore
+    // construite et le canevas n'a pas sa taille définitive : recadrer une
+    // seule fois à ce moment-là laisserait le montage hors de l'écran.
+    if (!app.vueInitialisee || app.ajusterVue || ImGui::GetFrameCount() < 4) {
         ajusterLaVue(app, origine, taille);
         app.vueInitialisee = true;
         app.ajusterVue = false;
@@ -448,8 +568,25 @@ void panneauSchema(App& app)
         app.pan = app.pan + io.MouseDelta;
     }
 
+    static bool gommeActive = false;     // bouton enfoncé avec la gomme
+    static bool gommeAEfface = false;    // l'annulation ne mémorise qu'une fois par geste
+
+    Pt extremite;
+    const bool surExtremite = survole && app.outil == Outil::Selection &&
+                              extremiteSousLaSouris(app, souris, extremite);
+
     if (survole && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        if (app.outil == Outil::Selection) {
+        if (surExtremite) {
+            // Tirer depuis une extrémité : un fil, sans changer d'outil.
+            app.trace = true;
+            app.traceFil = true;
+            app.traceDepart = extremite;
+            app.traceFin = extremite;
+            dipoleDeplace = -1;
+        } else if (app.outil == Outil::Gomme) {
+            gommeActive = true;
+            gommeAEfface = false;
+        } else if (app.outil == Outil::Selection) {
             app.selection = survoleDipole;
             if (survoleDipole >= 0) {
                 Elem& e = app.circuit.elems[survoleDipole];
@@ -465,6 +602,13 @@ void panneauSchema(App& app)
                     app.note(e.nom + " remplacée.");
                     app.recalculer();
                 }
+                if ((e.kind == Kind::Fusible || e.kind == Kind::Prise) && e.grillee) {
+                    app.memoriser();
+                    e.grillee = false;
+                    app.note(e.kind == Kind::Prise ? "Disjoncteur de " + e.nom + " réarmé."
+                                                   : e.nom + " remplacé.");
+                    app.recalculer();
+                }
                 dipoleDeplace = survoleDipole;
                 accroche = versGrille(app, souris);
                 pointDePression = souris;
@@ -474,8 +618,24 @@ void panneauSchema(App& app)
             }
         } else {
             app.trace = true;
+            app.traceFil = false;
             app.traceDepart = versGrille(app, souris);
             app.traceFin = app.traceDepart;
+        }
+    }
+
+    // Gomme : tout ce que le pointeur touche, bouton enfoncé, disparaît.
+    if (gommeActive) {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            gommeActive = false;
+        } else if (survole) {
+            const int cible = dipoleSousLaSouris(app, souris);
+            if (cible >= 0) {
+                if (!gommeAEfface) { app.memoriser(); gommeAEfface = true; }
+                app.circuit.supprimer(cible);
+                app.selection = -1;
+                app.recalculer();
+            }
         }
     }
 
@@ -512,12 +672,25 @@ void panneauSchema(App& app)
         app.traceFin = versGrille(app, souris);
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
             Pt fin = app.traceFin;
-            if (fin == app.traceDepart) fin.x += 2;      // simple clic : dipôle horizontal
-            app.memoriser();
-            const int index = app.circuit.ajouter(fabrique(kindDeLOutil(app.outil), app.traceDepart, fin));
-            app.selection = index;
-            app.trace = false;
-            app.recalculer();
+            const bool fil = app.traceFil || app.outil == Outil::Fil;
+            if (fin == app.traceDepart) {
+                if (app.traceFil) {
+                    // Simple clic sur une extrémité, sans tirer : c'est une
+                    // sélection, pas un fil de longueur nulle.
+                    app.selection = survoleDipole;
+                    app.trace = app.traceFil = false;
+                    fin = app.traceDepart;
+                } else {
+                    fin.x += 3;                          // simple clic : dipôle horizontal
+                }
+            }
+            if (app.trace) {
+                app.memoriser();
+                app.selection = fil ? poserFil(app, app.traceDepart, fin)
+                                    : app.circuit.ajouter(fabrique(kindDeLOutil(app.outil), app.traceDepart, fin));
+                app.trace = app.traceFil = false;
+                app.recalculer();
+            }
         }
     }
 
@@ -547,6 +720,16 @@ void panneauSchema(App& app)
                     app.recalculer();
                 }
             }
+            if (e.kind == Kind::Fusible && e.grillee && ImGui::MenuItem("Remplacer le fusible")) {
+                app.memoriser();
+                e.grillee = false;
+                app.recalculer();
+            }
+            if (e.kind == Kind::Prise && e.grillee && ImGui::MenuItem("Réarmer le disjoncteur")) {
+                app.memoriser();
+                e.grillee = false;
+                app.recalculer();
+            }
             if (e.kind == Kind::Multimetre && e.grillee && ImGui::MenuItem("Remplacer le fusible")) {
                 app.memoriser();
                 e.grillee = false;
@@ -562,6 +745,7 @@ void panneauSchema(App& app)
                 std::swap(e.a, e.b);
                 app.recalculer();
             }
+            if (ImGui::MenuItem("Tourner d'un quart de tour", "R")) app.tournerSelection();
             if (ImGui::MenuItem("Retourner le dipôle")) {
                 app.memoriser();
                 std::swap(e.a, e.b);
@@ -597,6 +781,25 @@ void panneauSchema(App& app)
     }
 
     // ── Dipôles ──────────────────────────────────────────────────────────
+    // Le courant est alternatif dans les îlots du montage alimentés par une
+    // prise, continu ailleurs : le montage des applications mélange les deux.
+    const int nbNoeuds = app.circuit.net.nbNoeuds;
+    std::vector<int> ilot(nbNoeuds);
+    for (int k = 0; k < nbNoeuds; ++k) ilot[k] = k;
+    auto racine = [&](int x) {
+        while (ilot[x] != x) x = ilot[x] = ilot[ilot[x]];
+        return x;
+    };
+    for (const Elem& e : app.circuit.elems)
+        if (e.na >= 0 && e.nb >= 0) ilot[racine(e.na)] = racine(e.nb);
+    std::vector<char> surSecteur(nbNoeuds, 0), surPile(nbNoeuds, 0);
+    bool aPrise = false;
+    for (const Elem& e : app.circuit.elems) {
+        if (e.na < 0) continue;
+        if (e.kind == Kind::Prise) { surSecteur[racine(e.na)] = 1; aPrise = true; }
+        if (e.kind == Kind::Pile)  surPile[racine(e.na)] = 1;
+    }
+
     for (int k = 0; k < (int)app.circuit.elems.size(); ++k) {
         const Elem& e = app.circuit.elems[k];
         const ImVec2 A = versEcran(app, e.a);
@@ -614,7 +817,8 @@ void panneauSchema(App& app)
             dl->AddCircle(ImVec2((A.x + B.x) / 2, (A.y + B.y) / 2), 16.0f * app.zoom, kColAide, 20, 1.5f);
 
         dessineSymbole(dl, e, A, B, app.zoom, k == app.selection ? kColSelection : couleur);
-        dessineCourant(dl, app, e, A, B);
+        const bool alternatif = e.na >= 0 && surSecteur[racine(e.na)] && !surPile[racine(e.na)];
+        dessineCourant(dl, app, e, A, B, alternatif);
         dessineValeurs(dl, app, e, A, B);
     }
 
@@ -631,15 +835,41 @@ void panneauSchema(App& app)
     if (app.trace) {
         const ImVec2 A = versEcran(app, app.traceDepart);
         const ImVec2 B = versEcran(app, app.traceFin);
-        dl->AddLine(A, B, kColSelection, 2.0f);
+        if (app.traceFil || app.outil == Outil::Fil) {
+            const ImVec2 C = versEcran(app, coudeDuFil(app.traceDepart, app.traceFin));
+            dl->AddLine(A, C, kColSelection, 2.0f);
+            dl->AddLine(C, B, kColSelection, 2.0f);
+        } else {
+            dl->AddLine(A, B, kColSelection, 2.0f);
+        }
         dl->AddCircleFilled(A, 4.0f, kColSelection, 12);
         dl->AddCircleFilled(B, 4.0f, kColSelection, 12);
     }
 
     // Repère du point de grille visé, pour poser proprement.
-    if (survole && app.outil != Outil::Selection) {
+    if (survole && app.outil != Outil::Selection && app.outil != Outil::Gomme) {
         const ImVec2 p = versEcran(app, versGrille(app, souris));
         dl->AddCircle(p, 6.0f * app.zoom, kColAide, 12, 2.0f);
+    }
+    // Extrémité d'où l'on peut tirer un fil : on la montre au survol.
+    if (surExtremite && !app.trace)
+        dl->AddCircleFilled(versEcran(app, extremite), 6.0f * app.zoom, kColAide, 12);
+    // La gomme : un cercle rouge, et le dipôle qu'elle effacerait.
+    if (survole && app.outil == Outil::Gomme) {
+        dl->AddCircle(souris, 12.0f, kColGrillee, 16, 2.0f);
+        if (survoleDipole >= 0) {
+            const Elem& e = app.circuit.elems[survoleDipole];
+            dl->AddLine(versEcran(app, e.a), versEcran(app, e.b), IM_COL32(170, 40, 40, 120), 10.0f * app.zoom);
+        }
+    }
+
+    // ── Bandeau de danger ────────────────────────────────────────────────
+    // § 6.7 : un montage sur le secteur n'apparaît jamais sans cet avertissement.
+    if (aPrise) {
+        const char* texte = "230 V : DANGER DE MORT. Simulation seulement, ne jamais reproduire à la maison.";
+        const float h = ImGui::GetFontSize() + 12.0f;
+        dl->AddRectFilled(origine, ImVec2(origine.x + taille.x, origine.y + h), IM_COL32(170, 30, 25, 235));
+        dl->AddText(ImVec2(origine.x + 10.0f, origine.y + 6.0f), IM_COL32(255, 255, 255, 255), texte);
     }
 
     // ── Bandeau de message ───────────────────────────────────────────────
@@ -670,9 +900,10 @@ void panneauSchema(App& app)
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             app.outil = Outil::Selection;
-            app.trace = false;
+            app.trace = app.traceFil = false;
         }
         if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) app.annuler();
+        if (!ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R)) app.tournerSelection();
     }
 
     ImGui::End();

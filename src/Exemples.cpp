@@ -22,6 +22,18 @@ Elem faire(Kind k, Pt a, Pt b, double v = 0, double v2 = 0)
     return e;
 }
 
+Elem nomme(Elem e, const char* nom)
+{
+    e.nom = nom;
+    return e;
+}
+
+Elem ouvert(Elem e)
+{
+    e.ferme = false;
+    return e;
+}
+
 // Boucle rectangulaire de base : pile à gauche, interrupteur en haut,
 // récepteur à droite. Rend les points utiles pour compléter le montage.
 void cadre(Circuit& c, double tensionPile, int largeur, int hauteur)
@@ -183,6 +195,162 @@ void guirlandeSerie(Circuit& c)
     c.ajouter(faire(Kind::Fil, {24, 0}, {25, 0}));
 }
 
+// 6e ch.13 : le matériau à tester est pris entre deux pinces crocodiles.
+void conducteurIsolant(Circuit& c)
+{
+    cadre(c, 4.5, 12, 6);
+    c.ajouter(faire(Kind::Fil, {0, 0}, {3, 0}));
+    c.ajouter(faire(Kind::Materiau, {3, 0}, {7, 0}, 0));   // cuivre pour commencer
+    c.ajouter(faire(Kind::Fil, {7, 0}, {12, 0}));
+    c.ajouter(faire(Kind::Lampe, {12, 0}, {12, 3}, 6.0, 0.6));
+    c.ajouter(faire(Kind::Fil, {12, 3}, {12, 6}));
+}
+
+// 6e ch.13 / 4e ch.6 : le fusible protège la pile du court-circuit.
+void fusibleProtection(Circuit& c)
+{
+    cadre(c, 4.5, 10, 6);
+    c.ajouter(faire(Kind::Fusible, {0, 0}, {3, 0}, 1.0));
+    c.ajouter(faire(Kind::Interrupteur, {3, 0}, {6, 0}));
+    c.ajouter(faire(Kind::Fil, {6, 0}, {10, 0}));
+    c.ajouter(faire(Kind::Lampe, {10, 0}, {10, 3}, 6.0, 0.6));
+    c.ajouter(faire(Kind::Fil, {10, 3}, {10, 6}));
+    // K2, ouvert : le fermer relie les deux fils de la lampe. Posé loin
+    // d'elle, pour que leurs étiquettes ne se chevauchent pas.
+    c.ajouter(faire(Kind::Fil, {6, 0}, {6, 2}));
+    c.ajouter(ouvert(faire(Kind::Interrupteur, {6, 2}, {6, 5})));
+    c.ajouter(faire(Kind::Fil, {6, 5}, {6, 6}));
+}
+
+// 4e ch.8 (approfondissement) : une résistance en série avec deux autres en
+// dérivation. Valeurs choisies pour tomber juste : 9 V, 100 ohm puis
+// 200 // 200 = 100 ohm, donc 4,5 V de chaque côté et 45 mA dans la pile.
+void circuitMixte(Circuit& c)
+{
+    cadre(c, 9.0, 14, 6);
+    c.ajouter(faire(Kind::Fil, {0, 0}, {2, 0}));
+    c.ajouter(faire(Kind::Resistance, {2, 0}, {6, 0}, 100.0));
+    c.ajouter(faire(Kind::Fil, {6, 0}, {10, 0}));
+    c.ajouter(faire(Kind::Fil, {10, 0}, {14, 0}));
+    c.ajouter(faire(Kind::Resistance, {10, 0}, {10, 6}, 200.0));
+    c.ajouter(faire(Kind::Resistance, {14, 0}, {14, 6}, 200.0));
+}
+
+// 3e ch.6 (approfondissement) : même TP que le conducteur ohmique, avec une
+// lampe. Les points relevés ne sont plus alignés.
+void caracteristiqueLampe(Circuit& c)
+{
+    caracteristique(c);
+    for (Elem& e : c.elems)
+        if (e.kind == Kind::Resistance) {
+            e.kind = Kind::Lampe;
+            e.valeur = 6.0;
+            e.valeur2 = 0.6;
+            e.nom = c.nomDisponible(Kind::Lampe);
+        }
+    c.construireNetlist();
+}
+
+// Une boucle secteur : prise à gauche, appareil à droite. Sert aux
+// applications du 4e ch.10 et du 3e ch.6.
+void boucleSecteur(Circuit& c, int x0, double tension, Elem appareil)
+{
+    Elem prise = faire(Kind::Prise, {x0, 4}, {x0, 2}, tension, 16.0);
+    c.ajouter(prise);
+    c.ajouter(faire(Kind::Fil, {x0, 2}, {x0, 0}));
+    c.ajouter(faire(Kind::Fil, {x0, 0}, {x0 + 6, 0}));
+    appareil.a = {x0 + 6, 0};
+    appareil.b = {x0 + 6, 6};
+    c.ajouter(appareil);
+    c.ajouter(faire(Kind::Fil, {x0 + 6, 6}, {x0, 6}));
+    c.ajouter(faire(Kind::Fil, {x0, 6}, {x0, 4}));
+}
+
+// 4e ch.10 : trois appareils de la vie courante, trois circuits côte à côte.
+void applications(Circuit& c)
+{
+    boucleSecteur(c, 0, 230.0, nomme(faire(Kind::Resistance, {}, {}, 46.0), "Lave-linge"));
+
+    c.ajouter(nomme(faire(Kind::Pile, {10, 4}, {10, 2}, 5.0, 0.0), "Chargeur"));
+    c.ajouter(faire(Kind::Fil, {10, 2}, {10, 0}));
+    c.ajouter(faire(Kind::Fil, {10, 0}, {16, 0}));
+    c.ajouter(nomme(faire(Kind::Resistance, {16, 0}, {16, 6}, 20.0), "Smartphone"));
+    c.ajouter(faire(Kind::Fil, {16, 6}, {10, 6}));
+    c.ajouter(faire(Kind::Fil, {10, 6}, {10, 4}));
+
+    boucleSecteur(c, 20, 230.0, nomme(faire(Kind::Resistance, {}, {}, 115.0), "Bouilloire"));
+}
+
+// 3e ch.6 : le ventilateur de l'énoncé, 1 kohm sous 220 V.
+void ventilateur(Circuit& c)
+{
+    Elem prise = faire(Kind::Prise, {0, 4}, {0, 2}, 220.0, 16.0);
+    c.ajouter(prise);
+    c.ajouter(faire(Kind::Fil, {0, 2}, {0, 0}));
+    c.ajouter(faire(Kind::Interrupteur, {0, 0}, {4, 0}));
+    c.ajouter(faire(Kind::Fil, {4, 0}, {8, 0}));
+    c.ajouter(nomme(faire(Kind::Moteur, {8, 0}, {8, 6}, 1000.0), "Ventilateur"));
+    c.ajouter(faire(Kind::Fil, {8, 6}, {0, 6}));
+    c.ajouter(faire(Kind::Fil, {0, 6}, {0, 4}));
+}
+
+// Un appareil de la maison vu par le circuit : sa résistance équivalente
+// R = U² / P sous 230 V.
+Elem appareil(const char* nom, double watts)
+{
+    return nomme(faire(Kind::Resistance, {}, {}, 230.0 * 230.0 / watts), nom);
+}
+
+struct Branche {
+    Elem recepteur;
+    bool enMarche;
+};
+
+// Appareils en dérivation sur une prise, chacun derrière son interrupteur.
+void tableauElectrique(Circuit& c, const std::vector<Branche>& branches)
+{
+    const int pas = 7;
+    const int largeur = pas * (int)branches.size();
+    c.ajouter(faire(Kind::Prise, {0, 6}, {0, 3}, 230.0, 16.0));
+    c.ajouter(faire(Kind::Fil, {0, 3}, {0, 0}));
+    c.ajouter(faire(Kind::Fil, {0, 6}, {0, 10}));
+    c.ajouter(faire(Kind::Fil, {0, 0}, {largeur, 0}));
+    c.ajouter(faire(Kind::Fil, {0, 10}, {largeur, 10}));
+    int x = pas;
+    for (const Branche& b : branches) {
+        Elem k = faire(Kind::Interrupteur, {x, 0}, {x, 3});
+        k.ferme = b.enMarche;
+        c.ajouter(k);
+        c.ajouter(faire(Kind::Fil, {x, 3}, {x, 4}));
+        Elem r = b.recepteur;
+        r.a = {x, 4};
+        r.b = {x, 9};
+        c.ajouter(r);
+        c.ajouter(faire(Kind::Fil, {x, 9}, {x, 10}));
+        x += pas;
+    }
+}
+
+// 3e ch.7 : puissance, énergie et coût, sur des appareils de la maison.
+void puissanceEnergie(Circuit& c)
+{
+    tableauElectrique(c, {{appareil("Sèche-cheveux", 2000.0), true},
+                          {appareil("Cafetière", 1000.0), false},
+                          {appareil("Chargeur", 10.0), false}});
+}
+
+// 4e ch.6 (approfondissement) : l'installation de la maison est en
+// dérivation, et le disjoncteur surveille l'intensité totale. Lampe 60 W,
+// puis les valeurs du cours : bouilloire 115 ohm (2 A) et lave-linge 46 ohm
+// (5 A). Le radiateur, éteint, fera tout sauter.
+void installationDomestique(Circuit& c)
+{
+    tableauElectrique(c, {{nomme(faire(Kind::Lampe, {}, {}, 230.0, 60.0), "Plafonnier"), true},
+                          {nomme(faire(Kind::Resistance, {}, {}, 115.0), "Bouilloire"), true},
+                          {nomme(faire(Kind::Resistance, {}, {}, 46.0), "Lave-linge"), true},
+                          {appareil("Radiateur", 2500.0), false}});
+}
+
 const std::vector<Exemple> kExemples = {
     {"Circuit simple : pile, interrupteur, lampe", "5e ch.7 — Le circuit électrique simple",
      "Interrupteur fermé : la lampe s'allume. Ouvert : plus rien ne circule.", circuitSimple},
@@ -216,6 +384,40 @@ const std::vector<Exemple> kExemples = {
 
     {"Court-circuit de la pile", "4e ch.6 — Rappels : danger",
      "Le fil relie le + au − : la pile débite un courant énorme et la lampe s'éteint.", courtCircuit},
+
+    {"Test conducteur ou isolant", "6e ch.13 — Électricité et sécurité",
+     "Change le matériau dans Propriétés. Cuivre et graphite : la lampe brille (moins avec le graphite). "
+     "Eau salée : elle luit à peine. Plastique, bois, verre : elle reste éteinte, ce sont des isolants.",
+     conducteurIsolant},
+
+    {"Fusible contre le court-circuit", "6e ch.13 / 4e ch.6 — Sécurité",
+     "Ferme K2 : la lampe est court-circuitée, le fusible de 1 A fond et ouvre le circuit avant que la "
+     "pile ne chauffe. Rouvre K2 puis clique sur le fusible pour le remplacer.", fusibleProtection},
+
+    {"Circuit mixte : série et dérivation", "4e ch.8 — Approfondissement",
+     "R1 = 100 ohm en série avec R2 et R3 = 200 ohm en dérivation : 4,50 V aux bornes de R1 comme de "
+     "R2 et R3, 45,0 mA dans R1 qui se partagent en 22,5 mA + 22,5 mA.", circuitMixte},
+
+    {"Caractéristique U = f(I) d'une lampe", "3e ch.6 — Approfondissement",
+     "Règle la pile de 1 V à 6 V et relève à chaque pas : les points ne sont pas alignés, la lampe "
+     "n'est pas un conducteur ohmique. Sa résistance passe d'environ 15 ohm à 60 ohm.", caracteristiqueLampe},
+
+    {"Applications : lave-linge, smartphone, bouilloire", "4e ch.10 — Applications",
+     "Lave-linge 46 ohm sous 230 V : 5,00 A. Smartphone 20 ohm sous 5 V : 250 mA. "
+     "Bouilloire 115 ohm sous 230 V : 2,00 A.", applications},
+
+    {"Ventilateur sur le secteur", "3e ch.6 — Loi d'Ohm",
+     "1 kohm sous 220 V : I = 220 / 1 000 = 0,22 A = 220 mA.", ventilateur},
+
+    {"Puissance, énergie et coût", "3e ch.7 — Puissance et énergie",
+     "Choisis le sèche-cheveux puis ouvre l'onglet Énergie : P = 2 000 W. En 15 min, "
+     "E = 2 kW x 0,25 h = 0,5 kWh, soit 0,10 euro à 0,20 euro le kWh. Allume les autres appareils "
+     "et lance le compteur.", puissanceEnergie},
+
+    {"Installation domestique en dérivation", "4e ch.6 — Approfondissement",
+     "Chaque appareil reçoit 230 V. Les intensités s'ajoutent : 0,26 + 2 + 5 = 7,26 A pour un "
+     "disjoncteur de 16 A. Ferme le radiateur (10,9 A) : 18,1 A, le disjoncteur déclenche.",
+     installationDomestique},
 };
 
 } // namespace

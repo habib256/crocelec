@@ -22,5 +22,6 @@ std::string fmtIntensite(double i);   // 190 mA   ·  0,220 A → 220 mA · 5,00
 std::string fmtResistance(double r);  // 60,0 Ω   ·  1,00 kΩ ·  10,0 MΩ
 std::string fmtPuissance(double p);   // 0,600 W  ·  2,30 kW
 std::string fmtEnergie(double joules);
+std::string fmtEuros(double euros);   // 0,10 €  ·  12,40 €  ·  0,002 € (moins d'un centime)
 
 } // namespace croc
