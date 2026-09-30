@@ -1,0 +1,12 @@
+build/
+imgui/
+crocelec*.ini
+*.croc
+!circuits/*.croc
+.DS_Store
+compile_commands.json
+.cache/
+
+# Document de l'Académie de Versailles (fiche Crocodile Clips) : sert de
+# référence en local, mais n'est pas à nous — pas de redistribution publique.
+docs/Doc.ELEVE.FicheAideLogicielCroclip.pdf
