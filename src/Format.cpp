@@ -121,4 +121,15 @@ std::string fmtEnergie(double joules)
     return avecPrefixe(joules, "J", 3);
 }
 
+std::string fmtEuros(double euros)
+{
+    // Au centime, comme sur une facture ; en dessous d'un centime, on garde
+    // un chiffre significatif plutôt que d'afficher « 0,00 € » pour un chargeur.
+    const char* euro = " \xE2\x82\xAC";
+    if (euros > 0 && euros < 0.01) return fmtNombre(euros, 1) + euro;
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%.2f", euros);
+    return francise(buf) + euro;
+}
+
 } // namespace croc

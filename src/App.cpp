@@ -2,6 +2,7 @@
 
 #include "Format.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace croc {
@@ -19,6 +20,9 @@ Kind kindDeLOutil(Outil o)
     case Outil::Voltmetre:    return Kind::Voltmetre;
     case Outil::Amperemetre:  return Kind::Amperemetre;
     case Outil::Multimetre:   return Kind::Multimetre;
+    case Outil::Prise:        return Kind::Prise;
+    case Outil::Fusible:      return Kind::Fusible;
+    case Outil::Materiau:     return Kind::Materiau;
     default:                  return Kind::COUNT;
     }
 }
@@ -61,6 +65,22 @@ void App::relever()
     releves.push_back(r);
     note("Relevé n°" + std::to_string(releves.size()) + " sur " + e.nom + " : U = " +
          fmtTension(r.u) + ", I = " + fmtIntensite(r.i));
+}
+
+void App::tournerSelection()
+{
+    if (selection < 0 || selection >= (int)circuit.elems.size()) return;
+    memoriser();
+    tourner(circuit.elems[selection]);
+    recalculer();
+}
+
+void App::avancerCompteur(double dtReel)
+{
+    if (!compteurEnMarche) return;
+    const double dt = dtReel * acceleration;
+    compteurSecondes += dt;
+    compteurJoules   += energieJoules(std::max(0.0, puissanceFournie(circuit)), dt);
 }
 
 void App::recalculer()

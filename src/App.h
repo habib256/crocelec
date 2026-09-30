@@ -20,6 +20,7 @@ namespace croc {
 
 enum class Outil {
     Selection,
+    Gomme,          // efface ce qu'elle touche, comme le crocodile de Crocodile Clips
     Fil,
     Pile,
     Interrupteur,
@@ -30,6 +31,9 @@ enum class Outil {
     Voltmetre,
     Amperemetre,
     Multimetre,
+    Prise,
+    Fusible,
+    Materiau,
     COUNT
 };
 
@@ -48,6 +52,7 @@ struct Reglages {
     bool animerCourant   = true;
     bool sensElectrons   = false;  // false = sens conventionnel (+ vers −)
     bool vuePaillasse    = false;  // réservé au lot V1 (bascule schéma/paillasse)
+    int  niveau          = 0;      // filtre de la Palette : 6, 5, 4, 3, ou 0 pour tout
 };
 
 // Une ligne du tableau de relevés : ce que l'élève recopierait sur son cahier
@@ -71,8 +76,11 @@ struct App {
     bool   vueInitialisee = false;
     bool   ajusterVue     = true;   // recadrer sur le montage au prochain rendu
 
-    // Tracé en cours (pose d'un dipôle par glisser).
+    // Tracé en cours (pose d'un dipôle par glisser). `traceFil` : le tracé
+    // est parti de l'extrémité d'un dipôle en mode Sélection, il donnera un
+    // fil quel que soit l'outil choisi.
     bool trace = false;
+    bool traceFil = false;
     Pt   traceDepart;
     Pt   traceFin;
 
@@ -81,6 +89,15 @@ struct App {
 
     std::vector<Releve> releves;
     std::string cheminCsv = "releves.csv";
+
+    // Énergie (3e ch.7) : calcul E = P × t sur l'appareil choisi, et compteur
+    // de l'installation qui tourne en temps accéléré.
+    double prixKWh          = 0.20;   // €/kWh — à ajuster au tarif en vigueur
+    double dureeMinutes     = 60.0;   // durée du calcul E = P × t
+    bool   compteurEnMarche = false;
+    double compteurJoules   = 0.0;
+    double compteurSecondes = 0.0;    // temps simulé, pas le temps réel
+    double acceleration     = 60.0;   // 1 s à l'écran = 1 min au compteur
 
     std::deque<std::string> journal;
     std::vector<Circuit>    historique;   // pile d'annulation
@@ -91,6 +108,8 @@ struct App {
     void annuler();
     void recalculer();
     void relever();            // fige une ligne de mesures sur le dipôle choisi
+    void avancerCompteur(double dtReel);
+    void tournerSelection();   // quart de tour du dipôle choisi (touche R)
 };
 
 // Panneaux (Panels.cpp)
@@ -104,5 +123,6 @@ void panneauBibliotheque(App& app);
 void panneauMultimetre(App& app);
 void panneauReleves(App& app);
 void panneauGraphique(App& app);
+void panneauEnergie(App& app);
 
 } // namespace croc

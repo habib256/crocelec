@@ -20,6 +20,9 @@ const char* nomKind(Kind k)
     case Kind::Voltmetre:    return "Voltmètre";
     case Kind::Amperemetre:  return "Ampèremètre";
     case Kind::Multimetre:   return "Multimètre";
+    case Kind::Prise:        return "Prise secteur";
+    case Kind::Fusible:      return "Fusible";
+    case Kind::Materiau:     return "Matériau test";
     default:                 return "?";
     }
 }
@@ -37,6 +40,9 @@ const char* prefixeKind(Kind k)
     case Kind::Voltmetre:    return "V";
     case Kind::Amperemetre:  return "A";
     case Kind::Multimetre:   return "MM";
+    case Kind::Prise:        return "S";
+    case Kind::Fusible:      return "F";
+    case Kind::Materiau:     return "T";
     default:                 return "X";
     }
 }
@@ -54,8 +60,84 @@ const char* aideKind(Kind k)
     case Kind::Voltmetre:    return "Mesure la tension. Il se branche EN DÉRIVATION, aux bornes du dipôle.";
     case Kind::Amperemetre:  return "Mesure l'intensité. Il se branche EN SÉRIE, dans la boucle.";
     case Kind::Multimetre:   return "Voltmètre, ampèremètre et ohmmètre en un seul appareil. Choisis les bornes et le calibre.";
+    case Kind::Prise:        return "Prise du secteur, 230 V : DANGER DE MORT. Son disjoncteur coupe tout en cas de surintensité.";
+    case Kind::Fusible:      return "Protège le circuit : il fond et ouvre la boucle si l'intensité dépasse sa valeur.";
+    case Kind::Materiau:     return "Objet placé entre deux pinces : la lampe dit s'il est conducteur ou isolant.";
     default:                 return "";
     }
+}
+
+namespace {
+
+struct Materiau {
+    const char* nom;
+    double resistance;   // Ω, pour l'échantillon tenu entre les pinces
+};
+
+// Valeurs d'ordre de grandeur, choisies pour ce que l'élève observe avec une
+// pile 4,5 V et une lampe 6 V : le cuivre allume franchement, la mine de
+// graphite allume moins, l'eau salée laisse passer un courant trop faible
+// pour que la lampe brille franchement (elle luit à peine), les isolants ne
+// laissent rien passer.
+const Materiau kMateriaux[] = {
+    {"cuivre",     1e-3},
+    {"graphite",   20.0},
+    {"eau salée",  100.0},
+    {"plastique",  1e13},
+    {"bois sec",   1e11},
+    {"verre",      1e14},
+};
+
+} // namespace
+
+int nbMateriaux() { return (int)(sizeof kMateriaux / sizeof kMateriaux[0]); }
+
+const char* nomMateriau(int index)
+{
+    if (index < 0 || index >= nbMateriaux()) index = 0;
+    return kMateriaux[index].nom;
+}
+
+double resistanceMateriau(int index)
+{
+    if (index < 0 || index >= nbMateriaux()) index = 0;
+    return kMateriaux[index].resistance;
+}
+
+bool estConducteur(int index) { return resistanceMateriau(index) < 1e6; }
+
+void tourner(Elem& e)
+{
+    // Coordonnées doublées : le milieu d'un dipôle tombe souvent entre deux
+    // points de grille. On tourne autour de ce milieu exact, (x, y) → (−y, x).
+    const int cx2 = e.a.x + e.b.x, cy2 = e.a.y + e.b.y;
+    auto quart = [&](Pt p) { return Pt{cx2 - (2 * p.y - cy2), cy2 + (2 * p.x - cx2)}; };
+    Pt a2 = quart(e.a), b2 = quart(e.b);
+
+    // Si dx + dy est impair, les extrémités tournées tombent au milieu des
+    // cases : on les recale d'un demi-pas en diagonale. Le sens du recalage
+    // alterne avec l'orientation du dipôle, si bien que les quatre recalages
+    // d'un tour complet s'annulent et que le dipôle revient à sa place.
+    const int dx = e.b.x - e.a.x, dy = e.b.y - e.a.y;
+    if ((dx + dy) & 1) {
+        const int nx = -dy, ny = dx;                  // direction après rotation
+        int quadrant;
+        if (nx > 0 && ny >= 0)       quadrant = 0;
+        else if (nx <= 0 && ny > 0)  quadrant = 1;
+        else if (nx < 0 && ny <= 0)  quadrant = 2;
+        else                         quadrant = 3;
+        const int s = (quadrant % 2 == 0) ? -1 : 1;
+        a2.x += s; a2.y += s;
+        b2.x += s; b2.y += s;
+    }
+    e.a = Pt{a2.x / 2, a2.y / 2};
+    e.b = Pt{b2.x / 2, b2.y / 2};
+}
+
+Pt coudeDuFil(Pt a, Pt b)
+{
+    if (a.x == b.x || a.y == b.y) return b;
+    return Pt{b.x, a.y};
 }
 
 int Circuit::ajouter(const Elem& e)

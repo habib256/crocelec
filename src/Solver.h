@@ -58,4 +58,13 @@ double resistanceModele(const Elem& e);
 // valeur très grande si les deux nœuds ne communiquent pas.
 double resistanceEntre(const Circuit& c, int na, int nb);
 
+// Puissance et énergie (3e ch.7). E = P × t, dans les deux jeux d'unités du
+// cours : watts et secondes pour les joules, kilowatts et heures pour le kWh.
+inline double energieJoules(double watts, double secondes) { return watts * secondes; }
+inline double energieKWh(double watts, double heures) { return watts / 1000.0 * heures; }
+
+// Puissance que les générateurs fournissent au montage : c'est ce que compte
+// le compteur électrique de la maison, tous appareils confondus.
+double puissanceFournie(const Circuit& c);
+
 } // namespace croc

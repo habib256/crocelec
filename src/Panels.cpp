@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
+#include <vector>
 
 namespace croc {
 namespace {
@@ -20,22 +21,29 @@ const ImVec4 kGris  = ImVec4(0.45f, 0.48f, 0.52f, 1.0f);
 struct EntreePalette {
     Outil outil;
     const char* etiquette;
-    const char* niveau;
+    int niveau;          // 6 = 6e … 3 = 3e : première classe où le dipôle sert
 };
 
-const EntreePalette kPalette[] = {
-    {Outil::Selection,    "Sélection",     ""},
-    {Outil::Fil,          "Fil",           "5e"},
-    {Outil::Pile,         "Pile",          "5e"},
-    {Outil::Interrupteur, "Interrupteur",  "5e"},
-    {Outil::Lampe,        "Lampe",         "5e"},
-    {Outil::Moteur,       "Moteur",        "5e"},
-    {Outil::Del,          "DEL",           "5e"},
-    {Outil::Resistance,   "Résistance",    "4e"},
-    {Outil::Voltmetre,    "Voltmètre",     "4e"},
-    {Outil::Amperemetre,  "Ampèremètre",   "4e"},
-    {Outil::Multimetre,   "Multimètre",    "4e"},
+// Familles, comme la barre de Crocodile Clips, mais réduites à ce que le
+// programme du collège utilise (§ 6.1 : catégories et filtre par niveau).
+struct Famille {
+    const char* nom;
+    std::vector<EntreePalette> entrees;
 };
+
+const std::vector<Famille>& familles()
+{
+    static const std::vector<Famille> f = {
+        {"Générateurs",           {{Outil::Pile, "Pile", 6}, {Outil::Prise, "Prise 230 V", 3}}},
+        {"Commande",              {{Outil::Interrupteur, "Interrupteur", 6}}},
+        {"Récepteurs",            {{Outil::Lampe, "Lampe", 6}, {Outil::Moteur, "Moteur", 5},
+                                   {Outil::Del, "DEL", 5}, {Outil::Resistance, "Résistance", 4}}},
+        {"Sécurité et matériaux", {{Outil::Materiau, "Matériau test", 6}, {Outil::Fusible, "Fusible", 6}}},
+        {"Appareils de mesure",   {{Outil::Voltmetre, "Voltmètre", 4}, {Outil::Amperemetre, "Ampèremètre", 4},
+                                   {Outil::Multimetre, "Multimètre", 4}}},
+    };
+    return f;
+}
 
 bool proche(double a, double b, double tolerance)
 {
@@ -70,44 +78,101 @@ void ligne(const char* format, ...)
 
 // ── Palette ──────────────────────────────────────────────────────────────
 
+namespace {
+
+// Bouton d'outil, surligné quand il est actif. Rend vrai si on l'a choisi.
+bool boutonOutil(App& app, Outil outil, const char* etiquette, ImVec2 taille)
+{
+    const bool actif = (app.outil == outil);
+    if (actif) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    const bool clic = ImGui::Button(etiquette, taille);
+    if (actif) ImGui::PopStyleColor();
+    if (clic) app.outil = outil;
+    return clic;
+}
+
+void bulle(const char* titre, const char* texte)
+{
+    if (!ImGui::IsItemHovered()) return;
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(titre);
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(320.0f);
+    ImGui::TextUnformatted(texte);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
+
+} // namespace
+
 void panneauPalette(App& app)
 {
     ImGui::Begin("Palette");
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("Choisis un dipôle, puis trace-le sur le schéma en glissant la souris.");
-    ImGui::PopTextWrapPos();
-    ImGui::Separator();
 
     // En mode simple : boutons hauts (faciles à viser, y compris au doigt),
     // et pas de Multimètre — son panneau n'est visible qu'en mode complet,
     // le voltmètre et l'ampèremètre simplifiés suffisent (§ 6.3).
     const float hauteurBouton = app.reglages.modeSimple ? ImGui::GetFontSize() * 2.1f : 0.0f;
 
-    for (const EntreePalette& entree : kPalette) {
-        if (app.reglages.modeSimple && entree.outil == Outil::Multimetre) continue;
-        const bool actif = (app.outil == entree.outil);
-        if (actif) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        if (ImGui::Button(entree.etiquette, ImVec2(-1, hauteurBouton))) app.outil = entree.outil;
-        if (actif) ImGui::PopStyleColor();
+    // ── Les trois outils de la fiche : sélectionner, relier, effacer ─────
+    const float tiers = (ImGui::GetContentRegionAvail().x - 2 * ImGui::GetStyle().ItemSpacing.x) / 3.0f;
+    boutonOutil(app, Outil::Selection, "Sélection", ImVec2(tiers, hauteurBouton));
+    bulle("Sélection", "Clique un dipôle pour le régler, glisse-le pour le déplacer. "
+                       "Tire depuis l'extrémité d'un dipôle pour poser un fil.");
+    ImGui::SameLine();
+    boutonOutil(app, Outil::Fil, "Fil", ImVec2(tiers, hauteurBouton));
+    bulle("Fil", aideKind(Kind::Fil));
+    ImGui::SameLine();
+    boutonOutil(app, Outil::Gomme, "Gomme", ImVec2(tiers, hauteurBouton));
+    bulle("Gomme", "Efface le dipôle ou le fil que tu touches. Garde le bouton enfoncé pour en effacer plusieurs.");
 
-        if (ImGui::IsItemHovered() && entree.outil != Outil::Selection) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted(nomKind(kindDeLOutil(entree.outil)));
-            ImGui::Separator();
-            ImGui::PushTextWrapPos(320.0f);
-            ImGui::TextUnformatted(aideKind(kindDeLOutil(entree.outil)));
-            ImGui::PopTextWrapPos();
-            ImGui::EndTooltip();
+    // ── Filtre par niveau ────────────────────────────────────────────────
+    ImGui::Spacing();
+    ImGui::TextDisabled("Niveau de la classe :");
+    const struct { const char* libelle; int niveau; } niveaux[] = {
+        {"6e", 6}, {"5e", 5}, {"4e", 4}, {"3e", 3}, {"Tout", 0}};
+    for (const auto& n : niveaux) {
+        if (&n != niveaux) ImGui::SameLine();
+        const bool actif = (app.reglages.niveau == n.niveau);
+        if (actif) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::SmallButton(n.libelle)) app.reglages.niveau = n.niveau;
+        if (actif) ImGui::PopStyleColor();
+    }
+    ImGui::Separator();
+
+    // ── Familles de dipôles ──────────────────────────────────────────────
+    for (const Famille& famille : familles()) {
+        std::vector<const EntreePalette*> visibles;
+        for (const EntreePalette& e : famille.entrees) {
+            if (app.reglages.modeSimple && e.outil == Outil::Multimetre) continue;
+            // Un élève de 4e voit aussi ce qui a servi en 6e et en 5e.
+            if (app.reglages.niveau != 0 && e.niveau < app.reglages.niveau) continue;
+            visibles.push_back(&e);
+        }
+        if (visibles.empty()) continue;
+
+        if (!ImGui::CollapsingHeader(famille.nom, ImGuiTreeNodeFlags_DefaultOpen)) continue;
+        for (const EntreePalette* e : visibles) {
+            boutonOutil(app, e->outil, e->etiquette, ImVec2(-1, hauteurBouton));
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::Text("%s  (dès la %de)", nomKind(kindDeLOutil(e->outil)), e->niveau);
+                ImGui::Separator();
+                ImGui::PushTextWrapPos(320.0f);
+                ImGui::TextUnformatted(aideKind(kindDeLOutil(e->outil)));
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
         }
     }
 
     ImGui::Separator();
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("Molette : zoom.");
-    ImGui::TextDisabled("Clic milieu : déplacer la vue.");
-    ImGui::TextDisabled("Suppr : effacer le dipôle choisi.");
+    ImGui::TextDisabled("Choisis un dipôle, puis trace-le sur le schéma en glissant.");
+    ImGui::TextDisabled("Tirer depuis l'extrémité d'un dipôle : un fil.");
     ImGui::TextDisabled("Clic sur un interrupteur : l'ouvrir ou le fermer.");
-    ImGui::TextDisabled("Glisser un dipôle : le déplacer.");
+    ImGui::TextDisabled("R : tourner le dipôle choisi. Suppr ou Gomme : l'effacer.");
+    ImGui::TextDisabled("Molette : zoom. Glisser dans le vide : déplacer la vue.");
     ImGui::PopTextWrapPos();
     ImGui::End();
 }
@@ -172,8 +237,10 @@ void panneauProprietes(App& app)
     }
     case Kind::Lampe: {
         float un = (float)e.valeur, pn = (float)e.valeur2;
-        if (ImGui::SliderFloat("Tension nominale (V)", &un, 1.0f, 24.0f, "%.1f V")) { e.valeur = un; change = true; }
-        if (ImGui::SliderFloat("Puissance nominale (W)", &pn, 0.05f, 60.0f, "%.2f W")) { e.valeur2 = pn; change = true; }
+        // Échelle logarithmique : de la lampe de poche (6 V) à l'ampoule
+        // de la maison (230 V / 60 W) sur le même curseur.
+        if (ImGui::SliderFloat("Tension nominale (V)", &un, 1.0f, 230.0f, "%.1f V", ImGuiSliderFlags_Logarithmic)) { e.valeur = un; change = true; }
+        if (ImGui::SliderFloat("Puissance nominale (W)", &pn, 0.05f, 100.0f, "%.2f W", ImGuiSliderFlags_Logarithmic)) { e.valeur2 = pn; change = true; }
         ImGui::TextDisabled("Résistance nominale : %s", fmtResistance(e.valeur * e.valeur / std::max(1e-6, e.valeur2)).c_str());
         if (e.grillee) {
             ImGui::TextColored(kRouge, "Lampe grillée.");
@@ -192,6 +259,64 @@ void panneauProprietes(App& app)
         }
         break;
     }
+    case Kind::Prise: {
+        ImGui::TextColored(kRouge, "230 V : danger de mort. Simulation seulement.");
+        ImGui::Text("Tension : %s", fmtTension(e.valeur).c_str());
+        ImGui::SameLine();
+        // 220 V : la valeur des anciens énoncés (ventilateur du 3e ch.6).
+        if (ImGui::SmallButton("230 V")) { e.valeur = 230.0; change = true; }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("220 V")) { e.valeur = 220.0; change = true; }
+        ImGui::Text("Disjoncteur : %s", fmtIntensite(e.valeur2).c_str());
+        const double calibres[] = {2, 10, 16, 20, 32};
+        for (double a : calibres) {
+            ImGui::SameLine(0.0f, 4.0f);
+            char lib[16];
+            std::snprintf(lib, sizeof lib, "%g A", a);
+            if (ImGui::SmallButton(lib)) { e.valeur2 = a; change = true; }
+        }
+        if (e.grillee) {
+            ImGui::TextColored(kRouge, "Disjoncteur déclenché : plus rien n'est alimenté.");
+            if (ImGui::SmallButton("Réarmer le disjoncteur")) { e.grillee = false; change = true; }
+            ImGui::TextDisabled("Supprime d'abord la cause (court-circuit, appareil de trop).");
+        }
+        break;
+    }
+    case Kind::Fusible: {
+        float imax = (float)e.valeur;
+        if (ImGui::SliderFloat("Intensité maximale (A)", &imax, 0.05f, 20.0f, "%.2f A", ImGuiSliderFlags_Logarithmic)) {
+            e.valeur = imax;
+            change = true;
+        }
+        const double usuels[] = {0.1, 0.5, 1, 5, 10};
+        for (double a : usuels) {
+            ImGui::SameLine(0.0f, 4.0f);
+            if (ImGui::SmallButton(fmtIntensite(a).c_str())) { e.valeur = a; change = true; }
+        }
+        if (e.grillee) {
+            ImGui::TextColored(kRouge, "Fusible fondu : le circuit est ouvert.");
+            if (ImGui::SmallButton("Remplacer le fusible")) { e.grillee = false; change = true; }
+        }
+        break;
+    }
+    case Kind::Materiau: {
+        int index = (int)e.valeur;
+        for (int k = 0; k < nbMateriaux(); ++k) {
+            if (k) ImGui::SameLine();
+            if (ImGui::RadioButton(nomMateriau(k), &index, k)) { e.valeur = k; change = true; }
+        }
+        // Le verdict n'est affiché qu'une fois le circuit alimenté : c'est
+        // la lampe (ou l'ampèremètre) qui doit répondre, pas le logiciel.
+        if (app.diag.boucleFermee || std::fabs(e.u) > 1e-3) {
+            if (estConducteur(index))
+                ImGui::TextColored(kVert, "Matériau %s : le courant passe, c'est un conducteur électrique.", nomMateriau(index));
+            else
+                ImGui::TextColored(kRouge, "Matériau %s : le courant ne passe pas, c'est un isolant électrique.", nomMateriau(index));
+        } else {
+            ImGui::TextDisabled("Place-le dans un circuit alimenté pour le tester.");
+        }
+        break;
+    }
     case Kind::Interrupteur: {
         if (ImGui::Checkbox("Fermé", &e.ferme)) change = true;
         ImGui::TextDisabled(e.ferme ? "Circuit fermé : le courant peut circuler."
@@ -207,11 +332,18 @@ void panneauProprietes(App& app)
     ImGui::Text("Mesures");
     ImGui::BulletText("U = %s", fmtTension(std::fabs(e.u)).c_str());
     ImGui::BulletText("I = %s", fmtIntensite(std::fabs(e.i)).c_str());
-    if (e.kind != Kind::Pile && e.rEff > 0 && e.rEff < 1e6)
+    if (!estGenerateur(e.kind) && e.rEff > 0 && e.rEff < 1e6)
         ImGui::BulletText("R = %s", fmtResistance(e.rEff).c_str());
     ImGui::BulletText("P = %s", fmtPuissance(std::fabs(e.p)).c_str());
 
     ImGui::Separator();
+    // Au doigt, ni touche R ni clic droit : les deux gestes ont leur bouton.
+    if (ImGui::Button("Tourner")) {
+        app.tournerSelection();
+        ImGui::End();
+        return;
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Supprimer ce dipôle")) {
         app.memoriser();
         app.circuit.supprimer(app.selection);
@@ -260,7 +392,7 @@ void panneauMesures(App& app)
             ImGui::TableNextColumn(); ImGui::TextUnformatted(fmtTension(std::fabs(e.u)).c_str());
             ImGui::TableNextColumn(); ImGui::TextUnformatted(fmtIntensite(std::fabs(e.i)).c_str());
             ImGui::TableNextColumn();
-            if (e.kind == Kind::Pile) ImGui::TextDisabled("—");
+            if (estGenerateur(e.kind)) ImGui::TextDisabled("—");
             else if (e.rEff > 0 && e.rEff < 1e6) ImGui::TextUnformatted(fmtResistance(e.rEff).c_str());
             else ImGui::TextDisabled("—");
             ImGui::TableNextColumn(); ImGui::TextUnformatted(fmtPuissance(std::fabs(e.p)).c_str());
@@ -318,9 +450,9 @@ void panneauLois(App& app)
         double uGen = 0, uRecepteurs = 0;
         bool aGenerateur = false;
         for (const Elem& e : c.elems) {
-            if (e.kind == Kind::Pile) { uGen += std::fabs(e.u); aGenerateur = true; }
+            if (estGenerateur(e.kind)) { uGen += std::fabs(e.u); aGenerateur = true; }
             else if (e.kind == Kind::Lampe || e.kind == Kind::Resistance ||
-                     e.kind == Kind::Moteur || e.kind == Kind::Del)
+                     e.kind == Kind::Moteur || e.kind == Kind::Del || e.kind == Kind::Materiau)
                 uRecepteurs += std::fabs(e.u);
         }
         if (aGenerateur) {
@@ -393,6 +525,33 @@ void panneauLois(App& app)
     }
     if (titre) ImGui::Unindent();
 
+    // ── Puissance électrique (3e ch.7) ───────────────────────────────────
+    if (app.diag.boucleFermee) {
+        double pRecue = 0;
+        int nb = 0;
+        ImGui::Spacing();
+        ImGui::Text("Puissance : P = U x I");
+        ImGui::Indent();
+        for (const Elem& e : c.elems) {
+            if (e.kind != Kind::Lampe && e.kind != Kind::Resistance && e.kind != Kind::Moteur &&
+                e.kind != Kind::Del && e.kind != Kind::Materiau)
+                continue;
+            if (std::fabs(e.p) < 1e-6) continue;
+            pRecue += std::fabs(e.p);
+            if (nb++ < 8)
+                ligne("%s : %s x %s = %s", e.nom.c_str(), fmtTension(std::fabs(e.u)).c_str(),
+                      fmtIntensite(std::fabs(e.i)).c_str(), fmtPuissance(std::fabs(e.p)).c_str());
+        }
+        const double pFournie = puissanceFournie(c);
+        if (nb > 0 && pFournie > 1e-6) {
+            ligne("Puissance fournie par le générateur : %s", fmtPuissance(pFournie).c_str());
+            verdict(proche(pFournie, pRecue, 2e-2),
+                    "Elle est égale à la somme des puissances reçues par les récepteurs.",
+                    "Une partie de la puissance part ailleurs (appareil de mesure, résistance interne).");
+        }
+        ImGui::Unindent();
+    }
+
     ImGui::End();
 }
 
@@ -435,6 +594,7 @@ void panneauBibliotheque(App& app)
             app.circuit.construireNetlist();
             app.selection = -1;
             app.outil = Outil::Selection;
+            app.ajusterVue = true;
             app.note(std::string("Montage ouvert : ") + ex.titre + " (" + ex.chapitre + ").");
             if (ex.attendu && ex.attendu[0]) app.note(std::string("Attendu : ") + ex.attendu);
             app.recalculer();

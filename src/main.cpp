@@ -62,8 +62,8 @@ bool chargerPolice(ImGuiIO& io)
 // Deux dispositions : le schéma au centre dans les deux cas.
 // Mode simple (élève) : Palette et Propriétés à gauche, Mesures et Lois en
 // onglets à droite, Bibliothèque en bas — cinq panneaux, rien de plus.
-// Mode complet (professeur) : s'y ajoutent Multimètre, Relevés, Graphique
-// et Journal.
+// Mode complet (professeur) : s'y ajoutent Multimètre, Relevés, Graphique,
+// Énergie et Journal.
 void construireDisposition(ImGuiID dockspace, bool simple)
 {
     ImGui::DockBuilderRemoveNode(dockspace);
@@ -95,6 +95,7 @@ void construireDisposition(ImGuiID dockspace, bool simple)
         ImGui::DockBuilderDockWindow("Relevés", droiteHaut);
         ImGui::DockBuilderDockWindow("Lois", droiteBas);
         ImGui::DockBuilderDockWindow("Graphique", droiteBas);
+        ImGui::DockBuilderDockWindow("Énergie", droiteBas);
         ImGui::DockBuilderDockWindow("Journal", bas);
     }
     ImGui::DockBuilderFinish(dockspace);
@@ -157,7 +158,7 @@ int main(int, char**)
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigDpiScaleFonts = true;
-    io.IniFilename = "crocelec-v3.ini";  // la disposition survit à la fermeture
+    io.IniFilename = "crocelec-v4.ini";  // la disposition survit à la fermeture
                                      // (suffixe de version : une disposition enregistrée
                                      //  avant l'ajout d'un panneau le laisserait flotter)
 
@@ -193,6 +194,7 @@ int main(int, char**)
         ImGui::NewFrame();
 
         app.tempsAnim += ImGui::GetIO().DeltaTime;
+        app.avancerCompteur(ImGui::GetIO().DeltaTime);
 
         const ImGuiID dockspace = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
         if (!dispositionFaite) {
@@ -264,7 +266,7 @@ int main(int, char**)
                     construireDisposition(dockspace, false);
                 }
                 ImGui::Separator();
-                ImGui::TextDisabled("Le mode complet ajoute le multimètre,\nles relevés, le graphique et le journal.");
+                ImGui::TextDisabled("Le mode complet ajoute le multimètre,\nles relevés, le graphique, l'énergie\net le journal.");
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Aide")) {
@@ -284,6 +286,7 @@ int main(int, char**)
             croc::panneauMultimetre(app);
             croc::panneauReleves(app);
             croc::panneauGraphique(app);
+            croc::panneauEnergie(app);
             croc::panneauJournal(app);
         }
 
